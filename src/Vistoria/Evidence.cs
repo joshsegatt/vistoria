@@ -124,6 +124,7 @@ namespace Vistoria
         public int CountLast90Days;     // relative to RunInfo.StartedUtc
         public DateTime? First, Last;
         public List<EventHit> Recent = new List<EventHit>(); // newest first, capped
+        public List<string> Targets = new List<string>();    // every distinct device named across ALL hits (disk 7), not just Recent
     }
 
     public class EventHit

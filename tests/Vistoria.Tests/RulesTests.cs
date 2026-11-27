@@ -57,6 +57,17 @@ public class RulesTests
     }
 
     [Fact]
+    public void Empty_dump_folder_without_the_event_log_is_not_ok()
+    {
+        var ev = Healthy();
+        ev.Events.Categories.RemoveAll(c => c.Key == "bsod");
+        ev.Errors["events.bsod.System"] = "EventLogException: log corrompido";
+        var c = Get(ev, "stability.bsod");
+        Assert.Equal(Status.NotChecked, c.Status);
+        Assert.Contains("log corrompido", c.Detail);
+    }
+
+    [Fact]
     public void Nothing_wrong_but_disk_unread_is_inconclusive_not_approved()
     {
         var ev = Healthy();
@@ -88,6 +99,80 @@ public class RulesTests
         var c = Get(ev, "disk.events");
         Assert.Equal(Status.Info, c.Status);
         Assert.Contains("removível", c.Detail);
+    }
+
+    [Fact]
+    public void Internal_bad_block_buried_under_pendrive_noise_is_still_critical()
+    {
+        var ev = Healthy();
+        ev.Disks.Add(new DiskInfo { DeviceId = "2", BusType = "USB", Health = "Saudável" });
+        Hits(ev, "disk_bad_block", 25, @"\Device\Harddisk2\DR2"); // the newest 25 are all the pendrive
+        Get(ev, "disk.events"); // sanity: fixture evaluates
+        ev.Events.Categories.Single(x => x.Key == "disk_bad_block").Targets.AddRange(new[] { @"\Device\Harddisk2\DR2", @"\Device\Harddisk0\DR0" });
+        Assert.Equal(Status.Critical, Get(ev, "disk.events").Status);
+    }
+
+    [Fact]
+    public void The_pendrive_vistoria_runs_from_does_not_make_a_clean_machine_inconclusive()
+    {
+        var ev = Healthy();
+        ev.Disks.Add(new DiskInfo { DeviceId = "1", Model = "SanDisk Cruzer", BusType = "USB", MediaType = "Não informado", Health = "Saudável" });
+        var checks = Rules.Evaluate(ev);
+        Assert.Equal(Status.Info, checks.Single(c => c.Id == "disk.health.1").Status);
+        Assert.Equal("Aprovado", Rules.Verdict(checks).Label);
+    }
+
+    [Fact]
+    public void Emmc_system_disk_on_the_sd_bus_without_smart_stays_not_checked()
+    {
+        var ev = Healthy();
+        ev.Disks[0].Nvme = null;
+        ev.Disks[0].BusType = "SD";
+        Assert.Equal(Status.NotChecked, Get(ev, "disk.health.0").Status);
+    }
+
+    [Fact]
+    public void Sata_ssd_wear_from_smart_is_shown_as_estimate_without_changing_status()
+    {
+        var ev = Healthy();
+        ev.Disks[0].Nvme = null;
+        ev.Disks[0].BusType = "SATA";
+        ev.Disks[0].Smart.Add(new SmartAttribute { Id = 9, Current = 99, Raw = 1000 });
+        ev.Disks[0].Smart.Add(new SmartAttribute { Id = 231, Current = 20, Raw = 20 }); // 20% life left, if 231 means that
+        var c = Get(ev, "disk.health.0");
+        Assert.Equal(Status.Ok, c.Status);
+        Assert.Contains("desgaste estimado 80% (SMART 231", c.Detail);
+    }
+
+    [Fact]
+    public void Failing_pendrive_does_not_fail_the_machine()
+    {
+        var ev = Healthy();
+        ev.Disks.Add(new DiskInfo { DeviceId = "1", BusType = "USB", Health = "Com falha" });
+        var checks = Rules.Evaluate(ev);
+        Assert.Equal(Status.Info, checks.Single(c => c.Id == "disk.health.1").Status);
+        Assert.Contains("COM FALHA", checks.Single(c => c.Id == "disk.health.1").Detail);
+        Assert.Equal("Aprovado", Rules.Verdict(checks).Label);
+    }
+
+    [Fact]
+    public void Log_cleared_with_security_log_unread_is_not_ok()
+    {
+        var ev = Healthy();
+        ev.Errors["events.log_cleared.Security"] = "Acesso negado: rode como administrador";
+        var c = Get(ev, "tamper.log_cleared");
+        Assert.Equal(Status.NotChecked, c.Status);
+        Assert.Contains("Acesso negado", c.Detail);
+    }
+
+    [Fact]
+    public void Old_hardware_history_without_recent_errors_is_a_warning_not_a_fail()
+    {
+        var ev = Healthy();
+        Hits(ev, "whea_error", 1, "Machine Check Exception", daysAgo: 400);
+        Hits(ev, "bsod", 2, "0x0000001a (0x41792, 0x0, 0x0, 0x0)", daysAgo: 400);
+        Assert.Equal(Status.Warning, Get(ev, "hardware.whea").Status);
+        Assert.Equal(Status.Warning, Get(ev, "stability.bsod").Status);
     }
 
     [Fact]

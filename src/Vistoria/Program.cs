@@ -92,9 +92,8 @@ Nada é gravado na máquina examinada. A saída vai para a pasta indicada:
             ev.Run.FinishedUtc = DateTime.UtcNow;
             ev.Checks = Rules.Evaluate(ev);
 
-            var outDir = Path.Combine(Opt("--saida") ?? Path.Combine(exeDir, "vistorias"),
-                $"{ev.Run.StartedUtc.ToLocalTime():yyyyMMdd-HHmmss}_{Safe(ev.Run.ComputerName)}");
-            Directory.CreateDirectory(outDir);
+            var outDir = NewDir(Path.Combine(Opt("--saida") ?? Path.Combine(exeDir, "vistorias"),
+                $"{ev.Run.StartedUtc.ToLocalTime():yyyyMMdd-HHmmss}_{Safe(ev.Run.ComputerName)}"));
 
             var utf8 = new UTF8Encoding(false);
             var jsonPath = Path.Combine(outDir, "evidencias.json");
@@ -107,8 +106,8 @@ Nada é gravado na máquina examinada. A saída vai para a pasta indicada:
                 .AppendLine($"Vistoria {ev.Run.Version}")
                 .AppendLine($"Maquina: {ev.Run.ComputerName}")
                 .AppendLine($"Serie: {ev.Machine.SystemSerial ?? ev.Machine.BiosSerial ?? "-"}")
-                .AppendLine($"Inicio UTC: {ev.Run.StartedUtc:yyyy-MM-ddTHH:mm:ssZ}")
-                .AppendLine($"Fim UTC: {ev.Run.FinishedUtc:yyyy-MM-ddTHH:mm:ssZ}")
+                .AppendLine($"Inicio UTC: {Iso(ev.Run.StartedUtc)}")
+                .AppendLine($"Fim UTC: {Iso(ev.Run.FinishedUtc)}")
                 .AppendLine($"Operador: {ev.Run.OperatorUser}{(admin ? " (admin)" : "")}")
                 .AppendLine($"Loja: {ev.Run.Shop ?? "-"}")
                 .AppendLine($"Tecnico: {ev.Run.Technician ?? "-"}")
@@ -152,14 +151,16 @@ Nada é gravado na máquina examinada. A saída vai para a pasta indicada:
                 {
                     UseShellExecute = true,
                     Verb = "runas",
-                    Arguments = string.Join(" ", args.Select(Quote)),
+                    // --sem-admin: if the elevated copy still is not admin (odd tokens), it must not ask again forever.
+                    Arguments = string.Join(" ", args.Concat(new[] { "--sem-admin" }).Select(Quote)),
                 };
                 Process.Start(psi);
                 return true;
             }
-            catch (Win32Exception e) when (e.NativeErrorCode == 1223) // ERROR_CANCELLED: UAC declined
+            catch (Win32Exception e) // 1223 = UAC declined; anything else (policy, no consent UI) ends the same way
             {
-                Console.WriteLine("Elevação recusada: seguindo sem administrador (coleta parcial).");
+                Console.WriteLine(e.NativeErrorCode == 1223 ? "Elevação recusada: seguindo sem administrador (coleta parcial)."
+                    : $"Elevação indisponível ({e.Message.Trim()}): seguindo sem administrador (coleta parcial).");
                 return false;
             }
         }
@@ -179,6 +180,18 @@ Nada é gravado na máquina examinada. A saída vai para a pasta indicada:
             }
             return sb.Append('\\', slashes * 2).Append('"').ToString();
         }
+
+        // Two runs in the same second must not overwrite each other's evidence.
+        static string NewDir(string path)
+        {
+            var dir = path;
+            for (int i = 2; Directory.Exists(dir); i++) dir = $"{path}-{i}";
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        // Invariant: ":" in a custom format is the culture time separator ('.' in some locales).
+        static string Iso(DateTime d) => d.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture);
 
         static string Safe(string s) => new string((s ?? "PC").Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch).ToArray());
 

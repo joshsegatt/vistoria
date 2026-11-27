@@ -41,3 +41,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" dist/Vistoria.exe dist/SHA256SUMS.txt --title "Vistoria ${{ github.ref_name }}" --generate-notes --prerelease
+
+  # End-to-end on real VMs. Hosted runners are Azure VMs running as administrator, so this exercises
+  # the admin-only paths (Security log, dumps, ATA SMART on virtual disks) that a dev box without UAC can't.
+  vm:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build src/Vistoria -c Release
+
+      - name: Smoke (3 runs, admin)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory vm-out | Out-Null
+          ./tests/smoke.ps1 -Exe src/Vistoria/bin/Release/net472/Vistoria.exe -Out vm-out -Runs 3
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: laudo-${{ matrix.os }}
+          path: vm-out/
