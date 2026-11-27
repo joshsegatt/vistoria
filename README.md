@@ -83,7 +83,8 @@ anteriores que os upgrades do Windows guardam. Quando as duas não batem, o laud
 - **Somente leitura.** Nada é gravado na máquina examinada e nenhum processo externo é chamado. Os discos são abertos sem direito de leitura ou escrita, só para consultas de status.
 - **Toda conclusão cita a fonte:** log e ID do evento, atributo SMART, chave de registro, arquivo de dump. Um teste automatizado garante isso.
 - **"Não verificado" nunca vira "OK".** Fonte que não pôde ser lida aparece com o motivo. Se nada de errado foi achado mas o disco ou o histórico de estabilidade não foram lidos, o veredito é **Inconclusivo**, nunca "Aprovado".
-- **Uma tela azul é uma tela azul.** O mesmo travamento aparece no evento 1001, no minidump e no MEMORY.DMP; o Vistoria conta uma vez só. Erro em pendrive ou cartão SD não reprova a máquina.
+- **Uma tela azul é uma tela azul.** O mesmo travamento aparece no evento 1001, no minidump e no MEMORY.DMP; o Vistoria conta uma vez só. Erro em pendrive ou cartão SD não reprova a máquina, e o próprio pendrive do Vistoria fica fora do veredito.
+- **Histórico antigo não reprova sozinho.** Erro de hardware (WHEA) ou tela azul repetida só reprova se ainda acontece nos últimos 90 dias; antes disso vira apontamento, porque a peça pode já ter sido trocada.
 - **Cadeia de custódia.** `evidencias.json` guarda tudo o que foi lido, em bruto. `manifesto.txt` traz o SHA-256 de cada arquivo, horários em UTC, a versão e o operador. O hash da evidência também sai impresso no laudo.
 
 ```powershell
@@ -101,7 +102,8 @@ Get-FileHash .\evidencias.json   # tem que bater com o laudo e o manifesto
 - Discos USB e controladoras RAID costumam esconder o SMART. O laudo marca esses discos como não verificados.
 - O histórico do Windows some numa reinstalação limpa. O laudo mostra o período coberto e usa o SMART, que sobrevive, para apontar a lacuna.
 - Ciclos de bateria dependem do firmware informar. Quando não informa, o laudo diz isso.
-- A v0.1 foi validada em hardware real (Windows 11, NVMe), sem administrador. Os caminhos que exigem admin (SMART ATA, log Security, dumps) são cobertos por testes com dados sintéticos; relatos de máquinas reais são bem-vindos nas issues.
+- Validado em hardware real (Windows 11, NVMe) sem administrador, e a cada push em máquinas virtuais Windows Server 2022 e 2025 como administrador (job `vm` do CI). Ainda falta rodar como admin em hardware real com SSD SATA e em notebook com bateria; relatos de máquinas reais são bem-vindos nas issues.
+- Desgaste de SSD SATA pelo SMART (atributos 231, 233, 177) aparece como estimativa e não muda o veredito: cada fabricante usa esses números de um jeito.
 
 ## Compilar
 
@@ -111,6 +113,12 @@ Requer o .NET SDK 9.0.200 ou mais novo (por causa do `Vistoria.slnx`), no Window
 dotnet test
 dotnet build src/Vistoria -c Release
 # src/Vistoria/bin/Release/net472/Vistoria.exe
+```
+
+Teste ponta a ponta (numa VM, ou como administrador para cobrir tudo): roda o exe três vezes e confere pastas, hashes do manifesto e a fonte de cada verificação.
+
+```powershell
+pwsh tests/smoke.ps1 -Exe src/Vistoria/bin/Release/net472/Vistoria.exe -Out $env:TEMP\vistoria-smoke
 ```
 
 O alvo é o .NET Framework 4.7.2, que já vem no Windows 10 (1803+) e no Windows 11. Resultado: um exe só,
