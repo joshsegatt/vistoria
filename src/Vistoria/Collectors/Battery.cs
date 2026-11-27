@@ -1,0 +1,45 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Management;
+
+namespace Vistoria.Collectors
+{
+    static class Battery
+    {
+        // Same ACPI data powercfg /batteryreport reads, without spawning a process or writing a file.
+        public static void Collect(Evidence ev) => Guard.Try(ev, "battery", () =>
+        {
+            // Many laptops implement capacity but not BatteryCycleCount: each class is optional on its own.
+            var full = Optional("SELECT InstanceName, FullChargedCapacity FROM BatteryFullChargedCapacity")
+                .ToDictionary(b => Wmi.Str(b, "InstanceName") ?? "", b => Wmi.Num<uint>(b, "FullChargedCapacity") ?? 0);
+            var cycles = Optional("SELECT InstanceName, CycleCount FROM BatteryCycleCount")
+                .ToDictionary(b => Wmi.Str(b, "InstanceName") ?? "", b => Wmi.Num<uint>(b, "CycleCount"));
+
+            // No BatteryStaticData = no ACPI battery driver loaded: a desktop.
+            foreach (var s in Optional("SELECT * FROM BatteryStaticData"))
+            {
+                var key = Wmi.Str(s, "InstanceName") ?? "";
+                full.TryGetValue(key, out var fullCap);
+                cycles.TryGetValue(key, out var cyc);
+                ev.Batteries.Add(new BatteryInfo
+                {
+                    Name = Wmi.Str(s, "DeviceName"),
+                    Manufacturer = Wmi.Str(s, "ManufactureName"),
+                    Serial = Wmi.Str(s, "SerialNumber"),
+                    DesignCapacity_mWh = Wmi.Num<uint>(s, "DesignedCapacity") ?? 0,
+                    FullChargeCapacity_mWh = fullCap,
+                    CycleCount = cyc > 0 ? cyc : null, // 0 = firmware does not report it
+                });
+            }
+        });
+
+        static List<ManagementBaseObject> Optional(string wql)
+        {
+            try { return Wmi.Query(Wmi.Root, wql); }
+            catch (ManagementException e) when (e.ErrorCode == ManagementStatus.NotSupported || e.ErrorCode == ManagementStatus.InvalidClass)
+            {
+                return new List<ManagementBaseObject>();
+            }
+        }
+    }
+}

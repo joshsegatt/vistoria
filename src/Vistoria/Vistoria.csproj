@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- 4.7.2 ships with Windows 10 1803+ and Windows 11: one small exe, nothing to install. -->
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.1.0</Version>
+    <Product>Vistoria</Product>
+    <Description>Vistoria cautelar para PCs usados</Description>
+    <Copyright>MIT License</Copyright>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Management" />
+    <InternalsVisibleTo Include="Vistoria.Tests" />
+  </ItemGroup>
+
+</Project>

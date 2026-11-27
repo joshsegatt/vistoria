@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Vistoria/Vistoria.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Vistoria.Tests/Vistoria.Tests.csproj" />
+  </Folder>
+</Solution>
