@@ -3,7 +3,7 @@
 # Vistoria
 
 **Vistoria cautelar para PCs usados.**
-Um `.exe` de 120 KB que roda do pendrive, lê o histórico que o hardware e o Windows guardam,
+Um `.exe` de 150 KB que roda do pendrive, lê o histórico que o hardware e o Windows guardam,
 cruza as fontes atrás de contradições e entrega um laudo com a evidência de cada conclusão.
 
 [![ci](https://github.com/joshsegatt/vistoria/actions/workflows/ci.yml/badge.svg)](https://github.com/joshsegatt/vistoria/actions/workflows/ci.yml)
@@ -139,7 +139,7 @@ Novas regras entram em `Rules.cs`, com teste em `tests/`. Novas fontes entram em
 <details>
 <summary><strong>English</strong></summary>
 
-**Vistoria** is a pre-purchase inspection for used Windows PCs: a single 120 KB, dependency-free `.exe`
+**Vistoria** is a pre-purchase inspection for used Windows PCs: a single 150 KB, dependency-free `.exe`
 (.NET Framework 4.7.2) that runs from a USB stick. It reads what survives a reformat (SSD/HDD SMART and NVMe
 health logs, battery wear and cycles), plus what Windows recorded since its install (bugchecks with codes from
 event 1001 and dump headers, WHEA hardware errors, unexpected shutdowns, GPU TDRs, cleared event logs,
