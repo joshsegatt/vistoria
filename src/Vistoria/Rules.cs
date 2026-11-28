@@ -120,7 +120,7 @@ namespace Vistoria
             if (temp > 0) facts.Add($"{temp} °C agora");
 
             // "OK" needs the sector / media-error counters; Windows' own counters alone don't cover them.
-            bool fullSmart = d.Smart.Count > 0 || d.Nvme != null;
+            bool fullSmart = (d.Smart.Count > 0 || d.Nvme != null) && !ZeroedCounters(d);
             Status st = crit.Count > 0 ? Status.Critical : warn.Count > 0 ? Status.Warning : fullSmart ? Status.Ok : Status.NotChecked;
             // The pendrive Vistoria runs from is a disk too. Without SMART it says nothing about the machine, so it
             // must not turn every vistoria "Inconclusivo". Not the system disk: cheap laptops boot from eMMC on the SD bus.
@@ -130,8 +130,11 @@ namespace Vistoria
                     "Disco removível (USB ou cartão), por exemplo o pendrive do Vistoria: fica fora do veredito."
                     + (crit.Count + warn.Count > 0 ? " Apontamentos dele: " + string.Join("; ", crit.Concat(warn)) + "." : "")
                     + (facts.Count > 0 ? " Lido: " + string.Join(", ", facts) + "." : ""), src.ToArray());
-            string detail = st == Status.NotChecked
-                ? $"SMART completo não lido: setores ruins e erros de mídia não foram verificados. {Why(ev, "disks.nvme." + d.DeviceId, "disks.smart_ata", "disks.reliability")}"
+            string detail = st == Status.NotChecked && ZeroedCounters(d)
+                ? "O disco responde ao SMART, mas com horas e vezes ligado zeradas: disco virtual (máquina virtual) ou firmware que não preenche o log. Esses números não provam nada."
+                  + (facts.Count > 0 ? " Lido: " + string.Join(", ", facts) + "." : "")
+                : st == Status.NotChecked
+                ? $"SMART completo não lido:setores ruins e erros de mídia não foram verificados. {Why(ev, "disks.nvme." + d.DeviceId, "disks.smart_ata", "disks.reliability")}"
                   + (d.BusType == "USB" ? " Discos USB costumam esconder o SMART atrás do adaptador." : "")
                   + $" O Windows informa: {d.Health}." + (facts.Count > 0 ? " Lido: " + string.Join(", ", facts) + "." : "")
                 : string.Join("; ", crit.Concat(warn).DefaultIfEmpty("nenhum sinal de defeito")) + ". " + string.Join(", ", facts) + (facts.Count > 0 ? "." : "");
@@ -165,11 +168,12 @@ namespace Vistoria
         {
             const string title = "Idade do disco x instalação do Windows";
             var sys = ev.Disks.FirstOrDefault(d => d.IsSystem) ?? (ev.Disks.Count == 1 ? ev.Disks[0] : null);
-            var poh = sys == null ? null : PowerOnHours(sys);
+            var poh = sys == null || ZeroedCounters(sys) ? null : PowerOnHours(sys);
             var install = OriginalInstall(ev.Machine);
             if (poh == null || install == null)
                 return Make("history.disk_vs_install", "Histórico", Status.NotChecked, title,
-                    poh == null ? "Horas de uso do disco do sistema não lidas. " + Why(ev, "disks.reliability", "disks.smart_ata") : "Data de instalação do Windows não encontrada.",
+                    poh == null && sys != null && ZeroedCounters(sys) ? "O disco do sistema informa 0 h e 0 vezes ligado (disco virtual ou firmware sem log): não dá para cruzar."
+                    : poh == null ? "Horas de uso do disco do sistema não lidas. " + Why(ev, "disks.reliability", "disks.smart_ata") : "Data de instalação do Windows não encontrada.",
                     "SMART / NVMe", @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\InstallDate", @"HKLM\SYSTEM\Setup\Source OS");
             var calendarHours = (now - install.Value).TotalHours;
             var src = new[] { $"Disco {sys.DeviceId}: {N(poh)} h ligado",$"Windows mais antigo registrado: {D(install)}" };
@@ -371,7 +375,8 @@ namespace Vistoria
             return gone.Count == 0
                 ? Make("parts.removed", "Peças", Status.Ok, title, $"Nenhum processador, placa de vídeo ou disco removido{scope}.", "SetupAPI: dispositivos presentes e ausentes")
                 : Make("parts.removed", "Peças", Status.Info, title,
-                    $"Estiveram nesta máquina e não estão mais{scope}: " + string.Join("; ", gone) + ". Pode ser upgrade, troca por defeito ou disco externo.",
+                    // No "since install" here: images and clones carry device records older than the install.
+                    "Estiveram nesta máquina e não estão mais: " + string.Join("; ", gone) + ". Pode ser upgrade, troca por defeito ou disco externo.",
                     "SetupAPI: DEVPKEY_Device_FirstInstallDate / LastRemovalDate");
         }
 
@@ -414,6 +419,9 @@ namespace Vistoria
         static byte? SmartWearId(DiskInfo d) => SmartWearAttr(d)?.Id;
         static SmartAttribute SmartWearAttr(DiskInfo d) => d.MediaType != "SSD" ? null
             : new byte[] { 231, 233, 177 }.Select(id => d.Smart.FirstOrDefault(a => a.Id == id)).FirstOrDefault(a => a != null && a.Current >= 1 && a.Current <= 100);
+
+        // A disk that ever ran has at least one power cycle: all zeros means fake counters (Hyper-V/Azure virtual NVMe does this).
+        static bool ZeroedCounters(DiskInfo d) => PowerCycles(d) == 0 && PowerOnHours(d) == 0;
 
         public static ulong? PowerCycles(DiskInfo d) => d.Nvme?.PowerCycles ?? Attr(d, 12);
         public static ulong? UnsafeShutdowns(DiskInfo d) => d.Nvme?.UnsafeShutdowns ?? Attr(d, 174) ?? Attr(d, 192);

@@ -145,6 +145,17 @@ public class RulesTests
     }
 
     [Fact]
+    public void Virtual_disk_with_zeroed_counters_is_not_checked_never_ok()
+    {
+        var ev = Healthy();
+        ev.Disks[0].Nvme = new NvmeHealth { AvailableSpare = 100, AvailableSpareThreshold = 10, TemperatureC = 50 }; // what Azure's virtual NVMe returns
+        var checks = Rules.Evaluate(ev);
+        Assert.Equal(Status.NotChecked, checks.Single(c => c.Id == "disk.health.0").Status);
+        Assert.Equal(Status.NotChecked, checks.Single(c => c.Id == "history.disk_vs_install").Status);
+        Assert.Equal("Inconclusivo", Rules.Verdict(checks).Label);
+    }
+
+    [Fact]
     public void Failing_pendrive_does_not_fail_the_machine()
     {
         var ev = Healthy();
