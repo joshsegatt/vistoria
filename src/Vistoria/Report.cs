@@ -98,9 +98,9 @@ namespace Vistoria
                 sb.Append("<section id=\"discos\"><h2>Discos</h2><div class=\"card scroll\"><table><thead><tr><th>Disco</th><th>Série</th><th class=\"n\">Tamanho</th><th class=\"n\">Horas ligado</th><th class=\"n\">Ligado</th><th class=\"n\">Desl. sem aviso</th><th class=\"n\">Vida usada</th><th>Windows diz</th></tr></thead><tbody>");
                 foreach (var d in ev.Disks)
                 {
-                    var cycles = d.Nvme?.PowerCycles ?? d.Smart.FirstOrDefault(a => a.Id == 12)?.Raw;
-                    var unsafeN = d.Nvme?.UnsafeShutdowns ?? d.Smart.FirstOrDefault(a => a.Id == 174 || a.Id == 192)?.Raw;
-                    var used = d.Nvme != null ? (uint?)d.Nvme.PercentageUsed : d.WearPercent;
+                    var cycles = Rules.PowerCycles(d);
+                    var unsafeN = Rules.UnsafeShutdowns(d);
+                    var used = Rules.WearUsed(d);
                     sb.Append("<tr><td><strong>").Append(H(d.Model)).Append("</strong><br><small>").Append(H(Join(" · ", "#" + d.DeviceId, d.BusType, d.MediaType, d.IsSystem ? "sistema" : null)))
                       .Append("</small></td><td class=\"mono\">").Append(H(d.Serial ?? "—")).Append("</td><td class=\"n\">").Append(Rules.Size(d.SizeBytes))
                       .Append("</td><td class=\"n\">").Append(Rules.N(Rules.PowerOnHours(d))).Append("</td><td class=\"n\">").Append(Rules.N(cycles))
@@ -121,7 +121,7 @@ namespace Vistoria
                     var n = d.Nvme;
                     sb.Append("<details class=\"card\"><summary>Log de saúde NVMe · ").Append(H(d.Model)).Append("</summary><dl class=\"grid\">");
                     Def(sb, "Alerta crítico", n.CriticalWarning == 0 ? "nenhum" : $"0x{n.CriticalWarning:X2}");
-                    Def(sb, "Temperatura", n.TemperatureC + " °C");
+                    Def(sb, "Temperatura", n.TemperatureC > 0 ? n.TemperatureC + " °C" : null); // raw 0 K = sensor not reported
                     Def(sb, "Reserva disponível", $"{n.AvailableSpare}% (limite {n.AvailableSpareThreshold}%)");
                     Def(sb, "Vida útil consumida", n.PercentageUsed + "%");
                     Def(sb, "Dados gravados", Rules.Size(n.DataUnitsWritten * 512000UL));
@@ -189,8 +189,8 @@ namespace Vistoria
             // Integrity
             sb.Append("<section id=\"integridade\"><h2>Integridade e custódia</h2><dl class=\"card grid\">");
             Def(sb, "Ferramenta", $"{ev.Run.Tool} {ev.Run.Version}");
-            Def(sb, "Início (UTC)", ev.Run.StartedUtc.ToString("yyyy-MM-dd HH:mm:ss"));
-            Def(sb, "Fim (UTC)", ev.Run.FinishedUtc.ToString("yyyy-MM-dd HH:mm:ss"));
+            Def(sb, "Início (UTC)", ev.Run.StartedUtc.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+            Def(sb, "Fim (UTC)", ev.Run.FinishedUtc.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
             Def(sb, "Executado por", $"{ev.Run.OperatorUser} em {ev.Run.ComputerName}" + (ev.Run.IsAdmin ? " (administrador)" : " (sem administrador)"));
             sb.Append("<div class=\"wide\"><dt>SHA-256 de evidencias.json</dt><dd class=\"mono hash\">").Append(H(evidenceSha256)).Append("</dd></div>");
             sb.Append("</dl><p class=\"note\">O arquivo evidencias.json, que fica na mesma pasta deste laudo, traz tudo o que foi lido, em bruto. Se o hash não bater com o arquivo, ele foi alterado depois da vistoria. Para conferir no PowerShell: <code>Get-FileHash evidencias.json</code>. Nada foi gravado na máquina examinada.</p></section>");

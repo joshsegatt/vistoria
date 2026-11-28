@@ -73,7 +73,7 @@ namespace Vistoria.Collectors
         static string GetString(IntPtr set, ref SP_DEVINFO_DATA d, DEVPROPKEY k)
         {
             var b = Get(set, ref d, k, TypeString);
-            return b == null ? null : Encoding.Unicode.GetString(b).TrimEnd('\0');
+            return b == null ? null : Encoding.Unicode.GetString(b).TrimEnd('\0').Trim(); // CPU names come space-padded
         }
 
         static bool? GetBool(IntPtr set, ref SP_DEVINFO_DATA d, DEVPROPKEY k)

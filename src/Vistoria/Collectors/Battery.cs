@@ -31,6 +31,12 @@ namespace Vistoria.Collectors
                     CycleCount = cyc > 0 ? cyc : null, // 0 = firmware does not report it
                 });
             }
+
+            // A laptop whose firmware skips the ACPI data must read "not verified", not "no battery".
+            // ACPI\ only: a UPS on USB also shows up in Win32_Battery (as HID\...) and is not the machine's battery.
+            if (ev.Batteries.Count == 0 && Wmi.Query(Wmi.Cim, "SELECT PNPDeviceID FROM Win32_Battery")
+                    .Any(b => (Wmi.Str(b, "PNPDeviceID") ?? "").StartsWith(@"ACPI\", System.StringComparison.OrdinalIgnoreCase)))
+                ev.Errors["battery"] = "o Windows vê uma bateria, mas o firmware não expõe a capacidade (BatteryStaticData)";
         });
 
         static List<ManagementBaseObject> Optional(string wql)

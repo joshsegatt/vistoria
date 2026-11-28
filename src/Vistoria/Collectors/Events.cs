@@ -15,6 +15,7 @@ namespace Vistoria.Collectors
             public (string Log, string Predicate)[] Queries;
             public Func<EventRecord, bool> Keep = _ => true;
             public Func<EventRecord, string> Detail = Describe;
+            public Func<EventRecord, string> Target; // which device the event names, tracked over every hit
         }
 
         static string Provs(params string[] names) => "(" + string.Join(" or ", names.Select(n => $"Provider[@Name='{n}']")) + ")";
@@ -32,7 +33,9 @@ namespace Vistoria.Collectors
                 Queries = new[] { ("System", Provs("Microsoft-Windows-WHEA-Logger") + " and Level=3") } },
             new Category { Key = "disk_bad_block", Name = "Bloco defeituoso no disco (disk 7)",
                 Queries = new[] { ("System", Provs("disk") + " and EventID=7") },
-                Detail = e => Prop(e, 0) }, // "\Device\Harddisk1\DR1": tells an internal disk from a pendrive
+                // "\Device\Harddisk1\DR1": tells an internal disk from a pendrive. Pendrives log these by the
+                // hundred, so the decision uses every disk named, not only the newest events.
+                Detail = e => Prop(e, 0), Target = e => Prop(e, 0) },
             new Category { Key = "ntfs_corruption", Name = "Corrupção no sistema de arquivos (NTFS 55)",
                 Queries = new[] { ("System", Provs("Ntfs", "Microsoft-Windows-Ntfs") + " and EventID=55") } },
             new Category { Key = "disk_io", Name = "Falha ou repetição de E/S no disco (disk 51/153, reset 129)",
@@ -81,6 +84,7 @@ namespace Vistoria.Collectors
                         if (t > recentCutoff) cat.CountLast90Days++;
                         if (cat.First == null || t < cat.First) cat.First = t;
                         if (cat.Last == null || t > cat.Last) cat.Last = t;
+                        if (c.Target?.Invoke(e) is string target && !cat.Targets.Contains(target)) cat.Targets.Add(target);
                         if (cat.Recent.Count < RecentCap * 2)
                             cat.Recent.Add(new EventHit { TimeUtc = t, Log = log, Provider = e.ProviderName, Id = e.Id, Detail = Trim(c.Detail(e)) });
                     }

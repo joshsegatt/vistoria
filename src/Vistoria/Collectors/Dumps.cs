@@ -22,18 +22,21 @@ namespace Vistoria.Collectors
         {
             foreach (var f in files)
             {
-                var fi = new FileInfo(f);
-                var d = new DumpFile { Path = f, SizeBytes = fi.Length, WrittenUtc = fi.LastWriteTimeUtc };
+                var d = new DumpFile { Path = f };
                 // Read-only, shared, 0x60 bytes: the header is all we need.
                 try
                 {
+                    var fi = new FileInfo(f);
+                    d.SizeBytes = fi.Length;
+                    d.WrittenUtc = fi.LastWriteTimeUtc;
                     using (var s = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                     {
                         var head = new byte[0x60];
                         if (s.Read(head, 0, head.Length) == head.Length) d.BugCheck = ParseBugCheck(head);
                     }
                 }
-                catch (Exception e) when (e is IOException || e is UnauthorizedAccessException) { } // locked or ACL'd: date and size still count
+                catch (FileNotFoundException) { continue; } // deleted between listing and reading
+                catch (Exception e) when (e is IOException || e is UnauthorizedAccessException) { } // locked or ACL'd: the file still counts
 
                 d.BugCheckName = d.BugCheck is uint code ? BugCheckName(code) : null;
                 ev.Dumps.Add(d);

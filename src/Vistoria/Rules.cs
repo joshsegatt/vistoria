@@ -97,6 +97,8 @@ namespace Vistoria
                 else if (wear >= NvmeUsedWarning) warn.Add($"desgaste {wear}%");
                 if (wear > 0) facts.Add($"desgaste {wear}%");
             }
+            // Vendors reuse these attribute IDs for other things: shown as an estimate, never used for the verdict.
+            else if (SmartWear(d) is uint est) facts.Add($"desgaste estimado {est}% (SMART {SmartWearId(d)}, varia por fabricante)");
 
             if (d.ReadErrorsUncorrected > 0 || d.WriteErrorsUncorrected > 0)
                 warn.Add($"erros não corrigidos: {d.ReadErrorsUncorrected ?? 0} leitura, {d.WriteErrorsUncorrected ?? 0} escrita");
@@ -104,10 +106,10 @@ namespace Vistoria
 
             var poh = PowerOnHours(d);
             if (poh != null) facts.Insert(0, $"{N(poh)} h ligado (~{N(poh / 24)} dias)");
-            var cycles = d.Nvme?.PowerCycles ?? Attr(d, 12);
+            var cycles = PowerCycles(d);
             if (cycles != null) facts.Add($"{cycles} vezes ligado");
 
-            var unsafeCount = d.Nvme?.UnsafeShutdowns ?? Attr(d, 174) ?? Attr(d, 192);
+            var unsafeCount = UnsafeShutdowns(d);
             if (unsafeCount != null && cycles > 0)
             {
                 facts.Add($"{unsafeCount} desligamentos sem aviso");
@@ -118,10 +120,21 @@ namespace Vistoria
             if (temp > 0) facts.Add($"{temp} °C agora");
 
             // "OK" needs the sector / media-error counters; Windows' own counters alone don't cover them.
-            bool fullSmart = d.Smart.Count > 0 || d.Nvme != null;
+            bool fullSmart = (d.Smart.Count > 0 || d.Nvme != null) && !ZeroedCounters(d);
             Status st = crit.Count > 0 ? Status.Critical : warn.Count > 0 ? Status.Warning : fullSmart ? Status.Ok : Status.NotChecked;
-            string detail = st == Status.NotChecked
-                ? $"SMART completo não lido: setores ruins e erros de mídia não foram verificados. {Why(ev, "disks.nvme." + d.DeviceId, "disks.smart_ata", "disks.reliability")}"
+            // The pendrive Vistoria runs from is a disk too. Without SMART it says nothing about the machine, so it
+            // must not turn every vistoria "Inconclusivo". Not the system disk: cheap laptops boot from eMMC on the SD bus.
+            // A worn-out pendrive is not the machine's fault either.
+            if (!d.IsSystem && (d.BusType == "USB" || d.BusType == "SD"))
+                return Make("disk.health." + d.DeviceId, "Disco", Status.Info, name,
+                    "Disco removível (USB ou cartão), por exemplo o pendrive do Vistoria: fica fora do veredito."
+                    + (crit.Count + warn.Count > 0 ? " Apontamentos dele: " + string.Join("; ", crit.Concat(warn)) + "." : "")
+                    + (facts.Count > 0 ? " Lido: " + string.Join(", ", facts) + "." : ""), src.ToArray());
+            string detail = st == Status.NotChecked && ZeroedCounters(d)
+                ? "O disco responde ao SMART, mas com horas e vezes ligado zeradas: disco virtual (máquina virtual) ou firmware que não preenche o log. Esses números não provam nada."
+                  + (facts.Count > 0 ? " Lido: " + string.Join(", ", facts) + "." : "")
+                : st == Status.NotChecked
+                ? $"SMART completo não lido:setores ruins e erros de mídia não foram verificados. {Why(ev, "disks.nvme." + d.DeviceId, "disks.smart_ata", "disks.reliability")}"
                   + (d.BusType == "USB" ? " Discos USB costumam esconder o SMART atrás do adaptador." : "")
                   + $" O Windows informa: {d.Health}." + (facts.Count > 0 ? " Lido: " + string.Join(", ", facts) + "." : "")
                 : string.Join("; ", crit.Concat(warn).DefaultIfEmpty("nenhum sinal de defeito")) + ". " + string.Join(", ", facts) + (facts.Count > 0 ? "." : "");
@@ -138,7 +151,7 @@ namespace Vistoria
             if (bad?.Count > 0)
             {
                 // Pendrives and SD cards log disk 7 all the time; only an internal disk's bad block fails the machine.
-                bool internalDisk = bad.Recent.Any(h => IsInternalDisk(ev, h.Detail));
+                bool internalDisk = bad.Targets.Concat(bad.Recent.Select(h => h.Detail)).Any(t => IsInternalDisk(ev, t));
                 st = internalDisk ? Status.Critical : Status.Info;
                 parts.Add($"{P(bad.Count, "bloco defeituoso", "blocos defeituosos")} (último {D(bad.Last)})"
                     + (internalDisk ? " em disco interno" : " só em disco removível ou externo (pendrive, cartão)"));
@@ -155,11 +168,12 @@ namespace Vistoria
         {
             const string title = "Idade do disco x instalação do Windows";
             var sys = ev.Disks.FirstOrDefault(d => d.IsSystem) ?? (ev.Disks.Count == 1 ? ev.Disks[0] : null);
-            var poh = sys == null ? null : PowerOnHours(sys);
+            var poh = sys == null || ZeroedCounters(sys) ? null : PowerOnHours(sys);
             var install = OriginalInstall(ev.Machine);
             if (poh == null || install == null)
                 return Make("history.disk_vs_install", "Histórico", Status.NotChecked, title,
-                    poh == null ? "Horas de uso do disco do sistema não lidas. " + Why(ev, "disks.reliability", "disks.smart_ata") : "Data de instalação do Windows não encontrada.",
+                    poh == null && sys != null && ZeroedCounters(sys) ? "O disco do sistema informa 0 h e 0 vezes ligado (disco virtual ou firmware sem log): não dá para cruzar."
+                    : poh == null ? "Horas de uso do disco do sistema não lidas. " + Why(ev, "disks.reliability", "disks.smart_ata") : "Data de instalação do Windows não encontrada.",
                     "SMART / NVMe", @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\InstallDate", @"HKLM\SYSTEM\Setup\Source OS");
             var calendarHours = (now - install.Value).TotalHours;
             var src = new[] { $"Disco {sys.DeviceId}: {N(poh)} h ligado",$"Windows mais antigo registrado: {D(install)}" };
@@ -216,13 +230,18 @@ namespace Vistoria
             var src = new List<string>();
             if (cat != null) src.Add($"Log System, WER-SystemErrorReporting 1001: {cat.Count}");
             if (dumpsRead) src.Add($@"C:\Windows\Minidump e MEMORY.DMP: {dumps.Count} arquivos");
+            // An empty dump folder alone proves little (Disk Cleanup empties it): OK needs the event log too.
+            if (total == 0 && cat == null)
+                return Make("stability.bsod", "Estabilidade", Status.NotChecked, title,
+                    "Nenhum dump encontrado, mas o log System não foi lido. " + Why(ev, "events.bsod.System"), src.ToArray());
             if (total == 0)
                 return Make("stability.bsod", "Estabilidade", Status.Ok, title, "Nenhuma tela azul registrada no período coberto.", src.ToArray());
 
             var recent = Math.Max(cat?.CountLast90Days ?? 0, crashes.Count(x => x.WrittenUtc > now.AddDays(-RecentDays)));
             var groups = codes.GroupBy(x => x).OrderByDescending(g => g.Count()).ToList();
             var hinted = groups.Where(g => Dumps.BugCheckHint(g.Key) != null).ToList();
-            Status st = hinted.Any(g => g.Count() >= 2) ? Status.Critical
+            // Critical = the same hardware-pointing code repeats AND the machine still crashes; old history alone is a warning.
+            Status st = hinted.Any(g => g.Count() >= 2) && recent > 0 ? Status.Critical
                 : hinted.Count > 0 || recent >= BsodRecentWarning ? Status.Warning : Status.Info;
             var last = new[] { cat?.Last, crashes.Count > 0 ? crashes.Max(x => x.WrittenUtc) : (DateTime?)null }.Max();
             var detail = $"{P(total, "tela azul", "telas azuis")}; {recent} nos últimos {RecentDays} dias; última em {D(last)}.";
@@ -250,9 +269,11 @@ namespace Vistoria
             var err = Cat(ev, "whea_error"); var warn = Cat(ev, "whea_warning");
             if (err == null && warn == null) return Make("hardware.whea", "Hardware", Status.NotChecked, title, Why(ev, "events.whea_error.System"), "Log System, WHEA-Logger");
             int e = err?.Count ?? 0, w = warn?.Count ?? 0;
-            Status st = e > 0 ? Status.Critical : w >= WheaWarningCount ? Status.Warning : w > 0 ? Status.Info : Status.Ok;
+            int eRecent = err?.CountLast90Days ?? 0;
+            // An uncorrected error in the last 90 days fails the machine; one only in old history may be a part already replaced.
+            Status st = eRecent > 0 ? Status.Critical : e > 0 || w >= WheaWarningCount ? Status.Warning : w > 0 ? Status.Info : Status.Ok;
             var detail = e == 0 && w == 0 ? "Nenhum erro de hardware reportado pelo processador, memória ou barramento PCIe."
-                : $"{P(e, "erro não corrigido", "erros não corrigidos")} e {P(w, "corrigido", "corrigidos")}, reportados pelo próprio hardware (processador, memória, PCIe)."
+                : $"{P(e, "erro não corrigido", "erros não corrigidos")} ({eRecent} nos últimos {RecentDays} dias) e {P(w, "corrigido", "corrigidos")}, reportados pelo próprio hardware (processador, memória, PCIe)."
                   + (err?.Recent.FirstOrDefault()?.Detail is string s ? " Último erro: " + s : "");
             return Make("hardware.whea", "Hardware", st, title, detail, $"Log System, WHEA-Logger: {e} erro(s), {w} aviso(s)");
         }
@@ -279,6 +300,11 @@ namespace Vistoria
             var cat = Cat(ev, "log_cleared");
             if (cat == null) return Make("tamper.log_cleared", "Adulteração", Status.NotChecked, title, Why(ev, "events.log_cleared.System"), "System 104", "Security 1102");
             var securityNote = ev.Errors.ContainsKey("events.log_cleared.Security") ? " O log Security não foi lido (sem administrador)." : "";
+            // Half the source unread is not a clean bill: a cleared Security log is exactly what would be missed.
+            if (cat.Count == 0 && (ev.Errors.ContainsKey("events.log_cleared.Security") || ev.Errors.ContainsKey("events.log_cleared.System")))
+                return Make("tamper.log_cleared", "Adulteração", Status.NotChecked, title,
+                    "Nenhuma limpeza encontrada no que foi lido, mas parte da fonte não foi lida. " + Why(ev, "events.log_cleared.Security", "events.log_cleared.System"),
+                    "System 104", "Security 1102");
             if (cat.Count == 0)
                 return Make("tamper.log_cleared", "Adulteração", Status.Ok, title, "Nenhuma limpeza de log registrada." + securityNote, "System 104", "Security 1102");
             return Make("tamper.log_cleared", "Adulteração", Status.Warning, title,
@@ -349,7 +375,8 @@ namespace Vistoria
             return gone.Count == 0
                 ? Make("parts.removed", "Peças", Status.Ok, title, $"Nenhum processador, placa de vídeo ou disco removido{scope}.", "SetupAPI: dispositivos presentes e ausentes")
                 : Make("parts.removed", "Peças", Status.Info, title,
-                    $"Estiveram nesta máquina e não estão mais{scope}: " + string.Join("; ", gone) + ". Pode ser upgrade, troca por defeito ou disco externo.",
+                    // No "since install" here: images and clones carry device records older than the install.
+                    "Estiveram nesta máquina e não estão mais: " + string.Join("; ", gone) + ". Pode ser upgrade, troca por defeito ou disco externo.",
                     "SetupAPI: DEVPKEY_Device_FirstInstallDate / LastRemovalDate");
         }
 
@@ -382,6 +409,22 @@ namespace Vistoria
 
         public static ulong? PowerOnHours(DiskInfo d) =>
             d.Nvme?.PowerOnHours ?? (Attr(d, 9) is ulong h ? h & 0xFFFFFFFF : (ulong?)null) ?? d.PowerOnHours;
+
+        // Percent of rated life used: NVMe log, else Windows' counter, else the SSD's own SMART life attribute.
+        public static uint? WearUsed(DiskInfo d) =>
+            d.Nvme != null ? d.Nvme.PercentageUsed : d.WearPercent != null && d.PowerOnHours != null ? d.WearPercent : SmartWear(d);
+
+        // 231 SSD Life Left, 233 Media Wearout, 177 Wear Leveling: normalized value counts down from 100 on SSDs.
+        static uint? SmartWear(DiskInfo d) => SmartWearAttr(d) is SmartAttribute a ? 100u - a.Current : (uint?)null;
+        static byte? SmartWearId(DiskInfo d) => SmartWearAttr(d)?.Id;
+        static SmartAttribute SmartWearAttr(DiskInfo d) => d.MediaType != "SSD" ? null
+            : new byte[] { 231, 233, 177 }.Select(id => d.Smart.FirstOrDefault(a => a.Id == id)).FirstOrDefault(a => a != null && a.Current >= 1 && a.Current <= 100);
+
+        // A disk that ever ran has at least one power cycle: all zeros means fake counters (Hyper-V/Azure virtual NVMe does this).
+        static bool ZeroedCounters(DiskInfo d) => PowerCycles(d) == 0 && PowerOnHours(d) == 0;
+
+        public static ulong? PowerCycles(DiskInfo d) => d.Nvme?.PowerCycles ?? Attr(d, 12);
+        public static ulong? UnsafeShutdowns(DiskInfo d) => d.Nvme?.UnsafeShutdowns ?? Attr(d, 174) ?? Attr(d, 192);
 
         static ulong? Attr(DiskInfo d, byte id) => d.Smart.FirstOrDefault(a => a.Id == id)?.Raw;
 
